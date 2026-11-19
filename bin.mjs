@@ -6,6 +6,7 @@ import { isWindows } from 'which-runtime'
 import path from 'bare-path'
 import pkg from './package.json'
 import App from './app.js'
+import TUI from './tui.js'
 
 const appName = pkg.productName || pkg.name
 const isDev = path.basename(Bare.argv[0]) === (isWindows ? 'bare.exe' : 'bare')
@@ -13,6 +14,7 @@ const isDev = path.basename(Bare.argv[0]) === (isWindows ? 'bare.exe' : 'bare')
 const cmd = command(
   appName,
   summary(pkg.description),
+  flag('--message <text>', 'message sent to worker IPC stream'),
   flag('--storage <dir>', 'custom storage directory'),
   flag('--no-updates', 'disable OTA updates for this run')
 )
@@ -23,6 +25,11 @@ if (cmd.flags.help) Bare.exit()
 const updates = cmd.flags.updates
 const storage = cmd.flags.storage || (isDev ? null : path.join(persistent(), appName))
 const dir = storage || path.join(os.tmpdir(), 'pear', appName)
+
+// In a terminal, run the UI and send every line below to it (see tui.js).
+// Without one, `tui` is null and this is plain hello-pear-bare.
+const tui = TUI.start({ name: appName, upgrade: pkg.upgrade, message: cmd.flags.message })
+const console = tui ? tui.console : globalThis.console
 
 console.log(`${appName} v${pkg.version}`)
 console.log(`Updates: ${updates === false ? 'disabled' : 'enabled'}`)
@@ -35,6 +42,8 @@ const app = new App({
   upgrade: pkg.upgrade,
   name: isWindows ? appName + '.exe' : appName
 })
+
+tui?.attach(app)
 
 app.on('message', (message) => console.log(message))
 app.on('updating', () => console.log('[updater] getting new update'))

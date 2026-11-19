@@ -1,11 +1,14 @@
-# hello-pear-bare
+# hello-pear-bare-tui
 
-> Pear Hello World for Standalone Bare Processes with `pear-runtime` worker
+> Pear Hello World for Standalone Bare Terminal UIs with `pear-runtime` worker
 
-End-to-end boilerplate for embedding [pear-runtime] into the [Bare] worker of a [Bare] CLI with peer-to-peer OTA update support.
+End-to-end boilerplate for embedding [pear-runtime] into the [Bare] worker of a [Bare] terminal UI with peer-to-peer OTA update support.
+
+This is [hello-pear-bare] with a [bare-tui] front end: the same entrypoint, updater resource and worker, but instead of logging to stdout the app renders a full-screen terminal UI.
 
 This boilerplate uses the companion [`hello-pear-worker`][hello-pear-worker] as a reusable cross-platform local backend. Keeping networking, storage and updates in a separate worker lets mobile apps, desktop UIs and standalone Bare applications share the same backend implementation while each parent owns its platform-specific interface.
 
+- Terminal UI with [bare-tui] (The Elm Architecture for Bare, after Bubble Tea)
 - Peer-to-Peer deployment with [pear][pear-docs] CLI
 - Peer-to-Peer Over-the-Air updates with [`pear-runtime`][pear-runtime] module
 - Bare worker process via `PearRuntime.run(...)`
@@ -21,6 +24,7 @@ This boilerplate uses the companion [`hello-pear-worker`][hello-pear-worker] as 
   - [Create an upgrade link](#create-an-upgrade-link)
   - [Start](#start)
 - [Architecture](#architecture)
+  - [Terminal UI](#terminal-ui)
   - [Updates](#updates)
   - [Workers](#workers)
 - [Peer-to-Peer Deployments](#peer-to-peer-deployments)
@@ -55,7 +59,7 @@ npm install
 
 ### Create an upgrade link
 
-This template expects `package.json` to contain a valid `pear://` link in the `upgrade` field. If it still contains the placeholder `pear://<YOUR_KEY_HERE>`, startup will fail with `INVALID_URL`.
+The `upgrade` field in `package.json` must hold a valid `pear://` link, even with `--no-updates`. This template ships with a working link so `npm start` runs out of the box. Replace it with your own link before you release, because it decides where your users get updates from. An invalid link makes startup fail with `INVALID_URL`. The terminal UI does not start in that case, so the error prints as plain output.
 
 Create a link with [`pear touch`](https://docs.pears.com/reference/cli.html#pear-touch-flags-channel):
 
@@ -73,6 +77,21 @@ Start app in development mode:
 npm start
 ```
 
+This opens the terminal UI: a live console with a spinner header, a feed of the app's log lines and the worker's IPC messages, and the available keys. Press <kbd>q</kbd> or <kbd>Ctrl+C</kbd> to quit; the terminal is restored on exit.
+
+| Key                              | Action                    |
+| -------------------------------- | ------------------------- |
+| <kbd>Enter</kbd>                 | send `ping` to the worker |
+| <kbd>q</kbd> / <kbd>Ctrl+C</kbd> | quit                      |
+
+In the feed, `‹` marks a message from the worker, `›` a message sent to it, and indented lines are the app's own log. The hello-pear-bare worker echoes anything it doesn't handle as `unknown-message <text>`, which the UI shows as `‹ worker received: <text>`. The plain-output line `CLI ready. Press Ctrl+C to stop.` is left out, since the footer lists the keys.
+
+Send a custom message to the worker at startup (default `hello from tui`):
+
+```sh
+npm start -- --message "hello from dev"
+```
+
 By default this repo starts with `--no-updates` in development to avoid local dev binaries being swapped while you iterate.
 
 Enable updates for local flow testing:
@@ -83,9 +102,63 @@ npm start -- --updates
 
 ## Architecture
 
+```
+bin.mjs ── console lines ─┐
+   │                      ▼
+   │                   tui.js (bare-tui Program) ── renders ──▶ terminal
+   │                      ▲
+   └── app.js (App) ── events
+          │
+          └── framed IPC ──▶ workers/main.js (pear-runtime, Hyperswarm, Corestore)
+```
+
+`app.js` and `workers/main.js` are identical to [hello-pear-bare]. `bin.mjs` is hello-pear-bare's entrypoint plus an `import TUI from './tui.js'`, a `--message` flag, and three lines that hand its output to the UI:
+
+```js
+const tui = TUI.start({ name: appName, upgrade: pkg.upgrade, message: cmd.flags.message })
+const console = tui ? tui.console : globalThis.console
+tui?.attach(app)
+```
+
+Everything else about the terminal UI is in `tui.js`.
+
+### Terminal UI
+
+`tui.js` is a [bare-tui] model, with `init()`, `update(msg)` and `view()`, running in a bare-tui `Program`. The `Program` owns the screen (raw mode, alternate screen, input decoding, resize) and restores the terminal on every exit.
+
+Because the UI owns the screen, nothing may print to stdout while it runs. `TUI.start()` returns a `console` that sends each line `bin.mjs` prints into the feed instead. `attach(app)` connects the UI and the `App`:
+
+- Worker messages (the `App`'s `message` event) show as worker lines.
+- The `--message` text is sent to the worker once the `App` is ready, and <kbd>Enter</kbd> sends `ping`, both over the `App`'s IPC pipe.
+- Quitting the UI closes the `App`.
+- Closing the `App` (on a signal or a failed startup) quits the UI.
+
+The model receives these messages:
+
+| Message                                 | Source                                        |
+| --------------------------------------- | --------------------------------------------- |
+| `{ type: 'log', level, line }`          | a line `bin.mjs` printed                      |
+| `{ type: 'worker', data }`              | a message from the worker                     |
+| `{ type: 'key' }`, `{ type: 'resize' }` | terminal input and window size, from bare-tui |
+
+To build your own UI, edit `tui.js`. See the [bare-tui docs][bare-tui] for components (`list`, `table`, `textinput`, `viewport`, `progress`, ...), `style` and layout.
+
+`TUI.start()` returns `null`, and the app runs exactly as hello-pear-bare, in two cases:
+
+- stdin or stdout is not a terminal (piped, redirected, CI);
+- the `upgrade` link is invalid, because the worker then aborts the process before the terminal could be restored.
+
+```sh
+npm start | cat
+```
+
+In that case `--message` is accepted but not sent, as hello-pear-bare has no UI to send it from.
+
+Exit codes are the same as hello-pear-bare: `130` / `129` / `131` / `143` for `SIGINT` / `SIGHUP` / `SIGQUIT` / `SIGTERM`, and `1` if startup fails. In the UI, <kbd>q</kbd> exits with `0` and <kbd>Ctrl+C</kbd> with `130`. Errors logged while the UI ran are printed again once the terminal is restored.
+
 ### Updates
 
-Updates are managed by the `App` class in `app.js`, which wraps the updater lifecycle as a ready resource and emits update events for `bin.mjs` to log.
+Updates are managed by the `App` class in `app.js`, which wraps the updater lifecycle as a ready resource and emits update events for `bin.mjs` to log, which the terminal UI shows in its feed.
 
 The worker uses `pear-runtime` and the configured `upgrade` link in `package.json`.
 
@@ -98,6 +171,8 @@ npm start -- --no-updates
 ### Workers
 
 The main CLI starts `workers/main.js` as a Bare sidecar and communicates with it over framed IPC.
+
+The worker shares the terminal with the UI, so it must report over IPC (`pipe.write(...)`) and never use `console.log` or `console.error`. Anything it prints goes straight onto the screen and garbles the UI. An uncaught error in the worker aborts the whole process, before the UI can restore the terminal.
 
 Maintainers use `hello-pear-worker` and [`inline-worker`](https://github.com/holepunchto/inline-worker) as development dependencies. After updating the worker package, inline it and save its runtime dependencies in this app:
 
@@ -156,7 +231,7 @@ npx pear-install pear://<key>
 ## Scripts
 
 - `npm run inline-worker` - update the committed worker and its runtime dependencies (maintainers)
-- `npm start` - run the Bare CLI in dev mode (`bare bin.mjs --no-updates`)
+- `npm start` - run the terminal UI in dev mode (`bare bin.mjs --no-updates`)
 - `npm test` - run `brittle-bare` tests
 - `npm run lint` - run prettier check and lunte
 - `npm run format` - format repository with prettier
@@ -185,18 +260,20 @@ The platform-specific `make:<platform>-<arch>` scripts build unsigned standalone
 
 ## Project Structure
 
-- `bin.mjs` - CLI entrypoint and runtime wiring
+- `bin.mjs` - CLI entrypoint and runtime wiring (hello-pear-bare, plus a `--message` flag and the three lines that start the UI)
+- `tui.js` - the terminal UI: a [bare-tui] model and its glue to `bin.mjs` and the `App`
 - `app.js` - update resource used by the entrypoint
 - `workers/main.js` - Bare worker example
 - `scripts/make.js` - standalone builder with host selection, signing, and notarization support
-- `test/index.js` - brittle-bare tests
+- `test/index.js` - brittle-bare tests for the terminal UI model
 
 ## Troubleshooting
 
-- `INVALID_URL: Invalid URL 'pear://<YOUR_KEY_HERE>'` means the placeholder `upgrade` link in `package.json` has not been replaced. Run `pear touch`, then put the generated `pear://...` link in `package.json`.
+- `INVALID_URL: Invalid URL 'pear://...'` means the `upgrade` link in `package.json` is not a valid Pear link. Run `pear touch`, then put the generated `pear://...` link in `package.json`.
 - If updates do not trigger, verify `package.json` contains a valid `upgrade` Pear link and that peers are seeding the target drive.
 - If `npm run make` fails on unsupported hosts, run a specific `make:<platform>-<arch>` script or build on a supported host.
-- This template does not implement app-level data persistence; it is a minimal CLI + updater example.
+- If the screen looks garbled after a crash, run `reset`. The UI restores the terminal on normal exits, errors and signals, but not after `SIGKILL` or a crash in the worker, which aborts the whole process.
+- This template does not implement app-level data persistence; it is a minimal terminal UI + updater example.
 
 <!-- Reference Links -->
 
@@ -209,4 +286,5 @@ The platform-specific `make:<platform>-<arch>` scripts build unsigned standalone
 [Bare]: https://github.com/holepunchto/bare
 [nodejs]: https://nodejs.org
 [bare-build]: https://github.com/holepunchto/bare-build
+[bare-tui]: https://github.com/holepunchto/bare-tui
 [make-pear-app]: https://github.com/holepunchto/actions/tree/main/make-pear-app
