@@ -59,7 +59,7 @@ npm install
 
 ### Create an upgrade link
 
-The `upgrade` field in `package.json` must hold a valid `pear://` link, even with `--no-updates`. This template ships with a working link so `npm start` runs out of the box. Replace it with your own link before you release, because it decides where your users get updates from. An invalid link makes startup fail with `INVALID_URL`. The terminal UI does not start in that case, so the error prints as plain output.
+This template expects `package.json` to contain a valid `pear://` link in the `upgrade` field, even with `--no-updates`. If it still contains the placeholder `pear://<YOUR_KEY_HERE>`, startup will fail with `INVALID_URL`. The terminal UI does not start in that case, so the error prints as plain output.
 
 Create a link with [`pear touch`](https://docs.pears.com/reference/cli.html#pear-touch-flags-channel):
 

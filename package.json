@@ -4,7 +4,7 @@
   "description": "Pear Runtime terminal UI boilerplate using Bare and bare-tui with OTA updater support.",
   "private": true,
   "bin": "bin.mjs",
-  "upgrade": "pear://p8wrifhbmga5tohfxaqfpfrpqkg4bnfducx7taic1jd3aebaj53o",
+  "upgrade": "pear://<YOUR_KEY_HERE>",
   "scripts": {
     "inline-worker": "npx inline-worker-module hello-pear-worker",
     "format": "prettier . --write",
